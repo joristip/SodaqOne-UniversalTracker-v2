@@ -71,7 +71,9 @@ void ConfigParams::read()
 
 void ConfigParams::reset()
 {
-    _defaultFixInterval = 15;
+    _measInterval = 120; //minutes; also test for movement, if there is movement, send GPS values as well.
+    
+    _defaultFixInterval = 60*24*7; //once a week (if no movement, else interval = _measInterval)
     _alternativeFixInterval = 0;
     _alternativeFixFromHours = 0;
     _alternativeFixFromMinutes = 0;
@@ -106,6 +108,8 @@ void ConfigParams::reset()
     _gpsMinSatelliteCount = 4;
     _isDebugOn = 0;
 
+    _isCayennePayloadEnabled = 1;
+
     if (configResetCallback) {
         configResetCallback();
     }
@@ -131,6 +135,7 @@ void ConfigParams::commit(bool forced)
 }
 
 static const Command args[] = {
+    { "Meas. Interval (min)      ", "meas=", Command::set_uint16, Command::show_uint16, &params._measInterval },
     { "GPS                       ", 0,      0,                  Command::show_title, 0 },
     { "GPS (OFF=0 / ON=1)        ", "gps=", Command::set_uint8, Command::show_uint8, &params._isGpsOn },
     { "Fix Interval (min)        ", "fi=", Command::set_uint16, Command::show_uint16, &params._defaultFixInterval },

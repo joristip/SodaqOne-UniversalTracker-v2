@@ -47,6 +47,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "LedColor.h"
 #include "Enums.h"
 #include "CayenneLPP.h"
+#include "LSM303.h"
 
 //#define DEBUG
 
@@ -56,10 +57,10 @@ POSSIBILITY OF SUCH DAMAGE.
 
 // #define DEFAULT_TEMPERATURE_SENSOR_OFFSET 33
 // #define DEFAULT_LORA_PORT 2
-// #define DEFAULT_IS_OTAA_ENABLED 1
+ #define DEFAULT_IS_OTAA_ENABLED 1
 // #define DEFAULT_DEVADDR_OR_DEVEUI "0000000000000000"
-// #define DEFAULT_APPSKEY_OR_APPEUI "00000000000000000000000000000000"
-// #define DEFAULT_NWSKEY_OR_APPKEY "00000000000000000000000000000000"
+ #define DEFAULT_APPSKEY_OR_APPEUI "70B3D57EF0005AA4"
+ #define DEFAULT_NWSKEY_OR_APPKEY "1CD0F0404D1BE0EBBD8AB7FB35D5650C"
 
 #define GPS_TIME_VALIDITY 0b00000011 // date and time (but not fully resolved)
 #define GPS_FIX_FLAGS 0b00000001 // just gnssFixOK
@@ -68,8 +69,10 @@ POSSIBILITY OF SUCH DAMAGE.
 #define MAX_RTC_EPOCH_OFFSET 25
 
 #define ADC_AREF 3.3f
-#define BATVOLT_R1 4.7f
-#define BATVOLT_R2 10.0f
+#define BATVOLT_R1 2.0f // 4.7f
+#define BATVOLT_R2 2.0f //10.0f
+
+#define TEMPERATURE_OFFSET 20.0
 
 #define DEBUG_STREAM SerialUSB
 #define CONSOLE_STREAM SerialUSB
@@ -101,11 +104,30 @@ POSSIBILITY OF SUCH DAMAGE.
 #define LORA_RESET -1
 #endif
 
+
+#define PING_VCC_PIN      11  
+#define PING_TRIGGER_PIN  8  // Arduino pin tied to trigger pin on the ultrasonic sensor.
+#define PING_ECHO_PIN     9   // Arduino pin tied to echo pin on the ultrasonic sensor.
+
+#define PING_MAX_DISTANCE 300 // Maximum distance we want to ping for (in centimeters). Maximum sensor distance is rated at 400-500cm.
+
+#define PING_OFFSET       40
+#define PING_FACTOR       0.343
+//  NewPing sonar(PING_TRIGGER_PIN, PING_ECHO_PIN, PING_MAX_DISTANCE); // NewPing setup of pins and maximum distance.
+
+int PINGCOUNT = 10;
+int pingValues[10] = {0};
+
+
+
+
 RTCZero rtc;
 RTCTimer timer;
 UBlox ublox;
 Time time;
-LIS3DE accelerometer;
+//LIS3DE accelerometer;
+LSM303 lsm303;
+uint16_t iPreviousMovement = 0;
 
 ReportDataRecord pendingReportDataRecord;
 bool isPendingReportDataRecordNew; // this is set to true only when pendingReportDataRecord is written by the delegate
@@ -147,21 +169,27 @@ bool initLoraAbp(LoraInitConsoleMessages messages);
 bool initLoraOtaa(LoraInitConsoleMessages messages);
 bool initLora(LoraInitConsoleMessages messages, LoraInitJoin join);
 bool initGps();
-void initOnTheMove();
+//void initOnTheMove();
 void systemSleep();
 void runDefaultFixEvent(uint32_t now);
 void runAlternativeFixEvent(uint32_t now);
 void runLoraModuleSleepExtendEvent(uint32_t now);
 void setGpsActive(bool on);
+void setPingActive(bool on);
 void setLoraActive(bool on);
-void setAccelerometerTempSensorActive(bool on);
+void setLsm303Active(bool on);
+//void setAccelerometerTempSensorActive(bool on);
 bool convertAndCheckHexArray(uint8_t* result, const char* hex, size_t resultSize);
 bool isAlternativeFixEventApplicable();
 bool isCurrentTimeOfDayWithin(uint32_t daySecondsFrom, uint32_t daySecondsTo);
 void delegateNavPvt(NavigationPositionVelocityTimeSolution* NavPvt);
 bool getGpsFixAndTransmit();
+bool getGpsFixAndTransmit(bool bGps);
 uint8_t getBatteryVoltage();
 int8_t getBoardTemperature();
+bool getMovement();
+void sort(int a[], int size);
+uint16_t getRange();
 void updateSendBuffer();
 void transmit();
 void updateConfigOverTheAir();
@@ -175,6 +203,10 @@ static void printBootUpMessage(Stream& stream);
 
 void setup()
 {
+
+
+
+  
     // Allow power to remain on
     pinMode(ENABLE_PIN_IO, OUTPUT);
     digitalWrite(ENABLE_PIN_IO, HIGH);
@@ -233,12 +265,12 @@ void setup()
     }
 
     isLoraInitialized = initLora(LORA_INIT_SHOW_CONSOLE_MESSAGES, LORA_INIT_JOIN);
-    if (params.getAccelerationPercentage() > 0) {
+    /*if (params.getAccelerationPercentage() > 0) {
         initOnTheMove();
 
         isOnTheMoveInitialized = true;
     }
-
+*/
     initRtcTimer();
 
     isDeviceInitialized = true;
@@ -274,6 +306,16 @@ void setup()
         setLedColor(GREEN);
         sodaq_wdt_safe_delay(800);
     }
+
+    pinMode(PING_VCC_PIN, OUTPUT);      // sets the digital pin as output
+    digitalWrite(PING_VCC_PIN, LOW);   // sets the OUTPUT Low
+    
+    pinMode(PING_TRIGGER_PIN, OUTPUT);
+    digitalWrite(PING_TRIGGER_PIN, LOW);  
+
+    pinMode(PING_ECHO_PIN, INPUT);
+
+    
 }
 
 void loop()
@@ -318,6 +360,7 @@ uint8_t getBatteryVoltage()
 /**
  * Returns the board temperature.
 */
+/*
 int8_t getBoardTemperature()
 {
     setAccelerometerTempSensorActive(true);
@@ -327,6 +370,101 @@ int8_t getBoardTemperature()
     setAccelerometerTempSensorActive(false);
 
     return temp;
+}*/
+int8_t getBoardTemperature()
+{
+    setLsm303Active(true);
+
+    uint8_t tempL = lsm303.readReg(LSM303::TEMP_OUT_L);
+    uint8_t tempH = lsm303.readReg(LSM303::TEMP_OUT_H);
+
+    // Note: tempH has the 4 "unused" bits set correctly by the sensor (0x0 or 0xF)
+    int16_t rawTemp = ((uint16_t)tempH << 8) | tempL;
+
+    setLsm303Active(false);
+
+    return round(TEMPERATURE_OFFSET + rawTemp / 8.0);
+}
+
+
+/**
+ * Returns if the board is moved.
+*/
+boolean getMovement()
+{
+    bool bRet = false;
+    char report[80];
+    
+    setLsm303Active(true);
+
+    lsm303.read();
+
+    if (abs(lsm303.m.y - iPreviousMovement) > 100) bRet = true;
+    iPreviousMovement = lsm303.m.y;
+
+    setLsm303Active(false);
+    return bRet;
+}
+
+void sort(int a[], int size) {
+    for(int i=0; i<(size-1); i++) {
+        for(int o=0; o<(size-(i+1)); o++) {
+                if(a[o] > a[o+1]) {
+                    int t = a[o];
+                    a[o] = a[o+1];
+                    a[o+1] = t;
+                }
+        }
+    }
+}
+
+/**
+ * Returns the range of the US-sensor.
+*/
+uint16_t getRange()
+{
+    uint16_t uiRet = 0;  
+ 
+    uint32_t duration, iTotal=0;;
+    uint16_t distance;
+
+    for (int i=0; i<PINGCOUNT; i++)
+    {
+        setPingActive(true);   // sets the OUTPUT high
+
+        digitalWrite(PING_TRIGGER_PIN, LOW);
+        delayMicroseconds(10);
+        
+        digitalWrite(PING_TRIGGER_PIN, HIGH);
+        delayMicroseconds(10); // Added this line
+        digitalWrite(PING_TRIGGER_PIN, LOW);
+        delayMicroseconds(200);
+        duration = pulseIn(PING_ECHO_PIN, HIGH);
+
+        setPingActive(false);   // sets the OUTPUT LOW
+    
+        pingValues[i] = (int)(((duration * PING_FACTOR) / 2 + PING_OFFSET) + .5);
+    }
+    
+    sort(pingValues,PINGCOUNT);
+    
+    for(int i=0; i<PINGCOUNT; i++) {
+        if (i>0 && i<PINGCOUNT-1) iTotal += pingValues[i];
+        debugPrintln(pingValues[i]);   
+    }
+    
+    distance = iTotal / (PINGCOUNT - 2);
+
+    debugPrint("Avarage: ");
+    debugPrint(distance);
+    debugPrintln(" mm");
+
+    if (distance == PING_OFFSET) distance = 0;
+    uiRet = constrain(distance, 0, PING_MAX_DISTANCE*10);
+     
+     
+     setPingActive(false);   // just to make sure;
+    return uiRet;
 }
 
 /**
@@ -345,12 +483,16 @@ void updateSendBuffer()
         cayenneRecord.addGPS(1, latitude, longitude, altitude);
 
         // Add battery voltage on data channel 2
-        float voltage = (float)pendingReportDataRecord.getBatteryVoltage() * 10 + 3000;
+        float voltage = (float)(pendingReportDataRecord.getBatteryVoltage() + 300) / 100;
         cayenneRecord.addAnalogInput(2, voltage);
 
         // Add temperature on data channel 3
         float temp = (float)pendingReportDataRecord.getBoardTemperature();
         cayenneRecord.addTemperature(3, temp);
+
+        // Add range on data channel 4
+        uint16_t range = pendingReportDataRecord.getRange();
+        cayenneRecord.addLuminosity(5, range);
 
         // Copy out the formatted record
         sendBufferSize = cayenneRecord.copy(sendBuffer);
@@ -663,6 +805,7 @@ bool initGps()
 /**
 * Initializes the on-the-move functionality (interrupt on acceleration).
 */
+/*
 void initOnTheMove()
 {
     pinMode(ACCEL_INT1, INPUT);
@@ -683,6 +826,7 @@ void initOnTheMove()
         params.getAccelerationDuration(),
         LIS3DE::MovementRecognition);
 }
+*/
 
 /**
  * Powers down all devices and puts the system to deep sleep.
@@ -832,6 +976,12 @@ void resetRtcTimerEvents()
 {
     timer.clearAllEvents();
 
+    // Schedule the default meas event (if applicable)
+    if (params.getMeasInterval() > 0) {
+        timer.every(params.getMeasInterval() * 60, runMeasEvent);
+    }
+
+
     // Schedule the default fix event (if applicable)
     if (params.getDefaultFixInterval() > 0) {
         timer.every(params.getDefaultFixInterval() * 60, runDefaultFixEvent);
@@ -876,6 +1026,16 @@ bool isCurrentTimeOfDayWithin(uint32_t daySecondsFrom, uint32_t daySecondsTo)
     uint32_t daySecondsCurrent = rtc.getHours() * 60 * 60 + rtc.getMinutes() * 60;
 
     return (daySecondsCurrent >= daySecondsFrom && daySecondsCurrent < daySecondsTo);
+}
+
+
+/**
+ * Runs the meas event sequence (only if applicable).
+ */
+void runMeasEvent(uint32_t now)
+{   
+        debugPrintln("Meas event started.");
+        getGpsFixAndTransmit(false);
 }
 
 /**
@@ -977,9 +1137,28 @@ void delegateNavPvt(NavigationPositionVelocityTimeSolution* NavPvt)
  * Times-out after params.getGpsFixTimeout seconds.
  * Please see the documentation for more details on how this process works.
  */
-bool getGpsFixAndTransmit()
+ bool getGpsFixAndTransmit()
 {
-    debugPrintln("Starting getGpsFixAndTransmit()...");
+    getGpsFixAndTransmit(true);
+}
+
+
+bool getGpsFixAndTransmit(bool bGps)
+{
+    bool isSuccessful = false;
+    uint32_t startTime = getNow();
+
+    if (getMovement()){
+        debugPrintln("Movement detected! Send GPS coordinates");
+        debugPrintln("Starting getGpsFixAndTransmit()...");
+        bGps = true;
+    }
+    else
+    {
+      debugPrintln("Starting getMeasAndTransmit()...");
+    }
+  
+ //   debugPrintln("Starting getGpsFixAndTransmit()...");
 
     if (!isGpsInitialized) {
         debugPrintln("GPS is not initialized, exiting...");
@@ -987,38 +1166,44 @@ bool getGpsFixAndTransmit()
         return false;
     }
 
-    bool isSuccessful = false;
-    setGpsActive(true);
-
-    pendingReportDataRecord.setSatelliteCount(0); // reset satellites to use them as a quality metric in the loop
-    uint32_t startTime = getNow();
-    while ((getNow() - startTime <= params.getGpsFixTimeout())
-        && (pendingReportDataRecord.getSatelliteCount() < params.getGpsMinSatelliteCount()))
-    {
-        sodaq_wdt_reset();
-        uint16_t bytes = ublox.available();
-
-        if (bytes) {
-            rtcEpochDelta = 0;
-            isPendingReportDataRecordNew = false;
-            ublox.GetPeriodic(bytes); // calls the delegate method for passing results
-
-            startTime += rtcEpochDelta; // just in case the clock was changed (by the delegate in ublox.GetPeriodic)
-
-            // isPendingReportDataRecordNew guarantees at least a 3d fix or GNSS + dead reckoning combined
-            // and is good enough to keep, but the while loop should keep trying until timeout or sat count larger than set
-            if (isPendingReportDataRecordNew) {
-                isSuccessful = true;
+    
+    
+    if (bGps) {
+        setGpsActive(true);
+    
+        pendingReportDataRecord.setSatelliteCount(0); // reset satellites to use them as a quality metric in the loop
+        
+        while ((getNow() - startTime <= params.getGpsFixTimeout())
+            && (pendingReportDataRecord.getSatelliteCount() < params.getGpsMinSatelliteCount()))
+        {
+            sodaq_wdt_reset();
+            uint16_t bytes = ublox.available();
+    
+            if (bytes) {
+                rtcEpochDelta = 0;
+                isPendingReportDataRecordNew = false;
+                ublox.GetPeriodic(bytes); // calls the delegate method for passing results
+    
+                startTime += rtcEpochDelta; // just in case the clock was changed (by the delegate in ublox.GetPeriodic)
+    
+                // isPendingReportDataRecordNew guarantees at least a 3d fix or GNSS + dead reckoning combined
+                // and is good enough to keep, but the while loop should keep trying until timeout or sat count larger than set
+                if (isPendingReportDataRecordNew) {
+                    isSuccessful = true;
+                }
             }
         }
+    
+        setGpsActive(false); // turn off gps as soon as it is not needed
     }
 
-    setGpsActive(false); // turn off gps as soon as it is not needed
-
+    
     // populate all fields of the report record
     pendingReportDataRecord.setTimestamp(getNow());
     pendingReportDataRecord.setBatteryVoltage(getBatteryVoltage());
     pendingReportDataRecord.setBoardTemperature(getBoardTemperature());
+
+    pendingReportDataRecord.setRange(getRange());
 
     GpsFixDataRecord record;
     record.init();
@@ -1047,6 +1232,7 @@ bool getGpsFixAndTransmit()
         debugPrintln();
     }
 
+    isSuccessful = true;
     updateSendBuffer();
     transmit();
 
@@ -1102,6 +1288,23 @@ void setGpsActive(bool on)
     }
 }
 
+
+/**
+ * Turns the ping module on or off (wake up or sleep)
+ */
+void setPingActive(bool on)
+{
+    if (on) {
+        //setPinStrength(PING_VCC_PIN, HIGH);    // sets the VCC pin high current
+        digitalWrite(PING_VCC_PIN, HIGH);   // sets the VCC pin high
+        delay(10);
+    }
+    else {
+        digitalWrite(PING_VCC_PIN, LOW);   // sets the VCC pin low
+        delay(20);
+    }
+}
+
 /**
  * Turns the LoRa module on or off (wake up or sleep)
  */
@@ -1121,6 +1324,7 @@ void setLoraActive(bool on)
  * Initializes the accelerometer or puts it in power-down mode
  * for the purpose of reading its temperature delta.
 */
+/*
 void setAccelerometerTempSensorActive(bool on)
 {
     // if on-the-move is initialized then the accelerometer is enabled anyway
@@ -1134,6 +1338,34 @@ void setAccelerometerTempSensorActive(bool on)
     }
     else {
         accelerometer.disable();
+    }
+}
+*/
+/**
+* Initializes the LSM303 or puts it in power-down mode.
+*/
+void setLsm303Active(bool on)
+{
+    if (on) {
+        if (!lsm303.init(LSM303::device_D, LSM303::sa0_low)) {
+            debugPrintln("Initialization of the LSM303 failed!");
+            return;
+        }
+
+        lsm303.enableDefault();
+        lsm303.writeReg(LSM303::CTRL5, lsm303.readReg(LSM303::CTRL5) | 0b10001000); // enable temp and 12.5Hz ODR 
+
+        sodaq_wdt_safe_delay(100);
+    }
+    else {
+        // disable accelerometer, power-down mode
+        lsm303.writeReg(LSM303::CTRL1, 0);
+
+        // zero CTRL5 (including turn off TEMP sensor)
+        lsm303.writeReg(LSM303::CTRL5, 0);
+
+        // disable magnetometer, power-down mode
+        lsm303.writeReg(LSM303::CTRL7, 0b00000010);
     }
 }
 

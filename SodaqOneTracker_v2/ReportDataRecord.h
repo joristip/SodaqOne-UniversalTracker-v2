@@ -48,8 +48,9 @@ POSSIBILITY OF SUCH DAMAGE.
 //    uint8_t Course;
 //    uint8_t SatelliteCount;
 //    uint8_t TimeToFix;
+//    uint16_t Range;
 
-#define REPORT_DATA_RECORD_HEADER "Timestamp, BatteryVoltage, BoardTemperature, Lat, Long, Altitude, Speed, Course, SatelliteCount, TimeToFix"
+#define REPORT_DATA_RECORD_HEADER "Timestamp, BatteryVoltage, BoardTemperature, Lat, Long, Altitude, Speed, Course, SatelliteCount, TimeToFix, Range"
 
 #define REPORT_DATA_FIELD_SIZES sizeof(uint32_t), \
                                 sizeof(uint8_t), \
@@ -60,7 +61,8 @@ POSSIBILITY OF SUCH DAMAGE.
                                 sizeof(uint16_t), \
                                 sizeof(uint8_t), \
                                 sizeof(uint8_t), \
-                                sizeof(uint8_t)
+                                sizeof(uint8_t), \
+                                sizeof(uint16_t)
 
 #define REPORT_DATA_BUFFER_SIZE (SUM(REPORT_DATA_FIELD_SIZES))
 #define REPORT_DATA_FIELD_COUNT (COUNT(REPORT_DATA_FIELD_SIZES))
@@ -111,12 +113,15 @@ public:
     uint8_t getTimeToFix() const { return getFieldValue<uint8_t>(TimeToFix); }
     void setTimeToFix(uint8_t value) const { setFieldValue(TimeToFix, value); }
 
+    uint16_t getRange() const { return getFieldValue<uint16_t>(Range); }
+     void setRange(uint16_t value) const { setFieldValue(Range, value); }
+
 protected:
     uint8_t getFieldSize(uint8_t fieldIndex) const;
 private:
     uint8_t buffer[REPORT_DATA_BUFFER_SIZE];
 
-    enum Fields { Timestamp, BatteryVoltage, BoardTemperature, Lat, Long, Altitude, Speed, Course, SatelliteCount, TimeToFix };
+    enum Fields { Timestamp, BatteryVoltage, BoardTemperature, Lat, Long, Altitude, Speed, Course, SatelliteCount, TimeToFix, Range };
 };
 
 #endif /* REPORTDATARECORD_H_ */

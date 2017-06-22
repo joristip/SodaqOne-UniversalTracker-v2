@@ -176,6 +176,32 @@ uint8_t CayenneLPP::addBarometricPressure(uint8_t channel, float hpa)
     return cursor;
 }
 
+uint8_t CayenneLPP::addDepth(uint8_t channel, uint16_t lux)
+{
+    if ((cursor + LPP_DEPTH_SIZE) > maxsize) {
+        return 0;
+    }
+    buffer[cursor++] = channel;
+    buffer[cursor++] = LPP_DEPTH;
+    buffer[cursor++] = lux >> 8;
+    buffer[cursor++] = lux;
+
+    return cursor;
+}
+
+uint8_t CayenneLPP::addDistance(uint8_t channel, uint16_t lux)
+{
+    if ((cursor + LPP_DISTANCE_SIZE) > maxsize) {
+        return 0;
+    }
+    buffer[cursor++] = channel;
+    buffer[cursor++] = LPP_LUMINOSITY;
+    buffer[cursor++] = lux >> 8;
+    buffer[cursor++] = lux;
+
+    return cursor;
+}
+
 uint8_t CayenneLPP::addGyrometer(uint8_t channel, float x, float y, float z)
 {
     if ((cursor + LPP_GYROMETER_SIZE) > maxsize) {
